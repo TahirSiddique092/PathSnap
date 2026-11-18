@@ -27,11 +27,15 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from .config import CFG
 from .geo import angle_diff_deg, bearing_deg
 from .network import RoadNetwork
 
-HEADING_WINDOW = 3  # points on each side
-NEIGHBOUR_OFFSETS = (-3, -2, -1, 1, 2, 3)
+# Constants come from configs/default.yaml (CONTRACTS §1); see the `features:` block there.
+HEADING_WINDOW = int(CFG["features"]["heading_window_pts"])  # points on each side
+_NW = int(CFG["features"]["neighbour_window_pts"])
+NEIGHBOUR_OFFSETS = tuple(o for o in range(-_NW, _NW + 1) if o != 0)
+HEADING_FULL_SPEED = float(CFG["features"]["heading_full_speed_mps"])
 
 FEATURE_COLS = [
     "dist_m", "dist_minus_min_m", "dist_ratio_min", "rank", "n_candidates",
@@ -77,7 +81,7 @@ def add_features(cands: pd.DataFrame, track_xy: np.ndarray, t: np.ndarray, net: 
     hd = angle_diff_deg(heading[pi], net.arc_bearing[ai])
     df["speed_mps"] = speed[pi]
     df["heading_diff_deg"] = hd
-    df["heading_align"] = np.cos(np.radians(hd)) * np.minimum(speed[pi] / 5.0, 1.0)
+    df["heading_align"] = np.cos(np.radians(hd)) * np.minimum(speed[pi] / HEADING_FULL_SPEED, 1.0)
 
     # consistency with neighbouring fixes
     acc = np.zeros(len(df))

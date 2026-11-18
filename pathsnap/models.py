@@ -28,6 +28,8 @@ from sklearn.neural_network import MLPClassifier
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
+from .config import CFG
+
 MODEL_FAMILIES = {
     "logreg": "Linear / probabilistic",
     "gnb": "Probabilistic (generative)",
@@ -49,8 +51,9 @@ DEFAULT_PARAMS = {
             "max_iter": 60, "early_stopping": True, "validation_fraction": 0.1, "n_iter_no_change": 6},
 }
 
-# Rows used to fit each model (None = all). KNN prediction cost grows with training-set size.
-MAX_TRAIN_ROWS = {"knn": 200_000}
+# Rows used to fit each model (absent = all). KNN prediction cost grows with training-set size.
+# Value lives in configs/default.yaml -> training.max_train_rows (CONTRACTS §1: constants only in YAML).
+MAX_TRAIN_ROWS = {k: int(v) for k, v in (CFG.get("training", {}).get("max_train_rows") or {}).items()}
 
 OBJECTIVES = {
     "logreg": "binary cross-entropy (log loss) + L2 penalty",

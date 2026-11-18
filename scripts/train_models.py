@@ -4,7 +4,10 @@ Inputs : data/processed/candidates_{train,test}.parquet, points_{train,test}.par
          (run `python -m scripts.build_dataset` first — it adds the features from pathsnap/features.py)
 Outputs: results/model_comparison.csv     one row per model (all columns needed for report table 3.1)
          results/cv_folds.csv             per-fold CV metrics (stability across folds)
-         results/training_history/        epoch-wise loss for models that have one (MLP only)
+         results/training_history/        epoch-wise loss for models that have one (MLP only):
+                                          mlp_history.csv = per-epoch train AND validation log loss
+                                          (80/20 split of train BY TRIP); mlp_final.csv = sklearn loss_curve_
+         Plots: run `python -m scripts.plot_models` afterwards (reads only these CSVs).
          artifacts/untuned/<model>.joblib refit-on-all-train model
 
 Run:
@@ -96,6 +99,39 @@ def reference_baselines(c_tr, c_te, p_tr, p_te) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def mlp_epoch_history(X, y, groups, seed: int, out_csv: Path, epochs: int | None = None) -> pd.DataFrame:
+    """Genuine per-epoch TRAIN and VALIDATION log loss for the MLP (the only model with an epoch history).
+
+    Train partition only, split 80/20 BY TRIP (GroupShuffleSplit), so validation trips are unseen.
+    The scaler is fitted on the 80% part; the MLP is then trained one epoch at a time with partial_fit,
+    using the same architecture / regularisation as DEFAULT_PARAMS["mlp"].
+    """
+    from sklearn.metrics import log_loss
+    from sklearn.model_selection import GroupShuffleSplit
+
+    tr, va = next(GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=seed).split(X, y, groups))
+    pipe = build_model("mlp", {"early_stopping": False}, seed)
+    scaler, clf = pipe.steps[0][1], pipe.steps[-1][1]
+    Xtr, Xva = scaler.fit_transform(X[tr]), scaler.transform(X[va])
+    n_ep = epochs or int(DEFAULT_PARAMS["mlp"]["max_iter"])
+    rng = np.random.default_rng(seed)
+    bs = int(DEFAULT_PARAMS["mlp"]["batch_size"])
+    rows = []
+    for ep in range(1, n_ep + 1):
+        order = rng.permutation(len(Xtr))  # one epoch = one shuffled pass in mini-batches
+        for s in range(0, len(order), bs):
+            b = order[s:s + bs]
+            clf.partial_fit(Xtr[b], y[tr][b], classes=np.array([0, 1]))
+        rows.append({"epoch": ep,
+                     "train_log_loss": log_loss(y[tr], clf.predict_proba(Xtr)[:, 1], labels=[0, 1]),
+                     "val_log_loss": log_loss(y[va], clf.predict_proba(Xva)[:, 1], labels=[0, 1]),
+                     "n_train_trips": len(np.unique(groups[tr])), "n_val_trips": len(np.unique(groups[va]))})
+        print(f"  mlp epoch {ep:3d}: train {rows[-1]['train_log_loss']:.4f}  val {rows[-1]['val_log_loss']:.4f}")
+    h = pd.DataFrame(rows)
+    h.to_csv(out_csv, index=False)
+    return h
+
+
 def upsert_csv(path: Path, df: pd.DataFrame, keys: list[str]):
     if path.exists():
         old = pd.read_csv(path)
@@ -111,6 +147,8 @@ def main():
     ap.add_argument("--max-train-rows", type=int, default=None, help="cap rows for every model (smoke tests)")
     ap.add_argument("--results-dir", default=CFG["paths"]["results_dir"])
     ap.add_argument("--artifacts-dir", default=CFG["paths"]["artifacts_dir"])
+    ap.add_argument("--mlp-history-only", action="store_true",
+                    help="only record the MLP per-epoch train/validation log loss (training_history/mlp_history.csv)")
     args = ap.parse_args()
 
     seed = CFG["seed"]
@@ -127,6 +165,12 @@ def main():
     te_lab = c_te[LABEL].to_numpy() != -1
     print(f"train: {c_tr.trip_id.nunique()} trips, {fit_mask.sum():,} labelled candidate rows | "
           f"test: {c_te.trip_id.nunique()} trips, {len(c_te):,} rows | {len(FEATS)} features")
+    if args.mlp_history_only or "mlp" in args.models:
+        print("\n=== mlp epoch history (train partition, 80/20 split by trip) ===")
+        mlp_epoch_history(X_all[fit_mask], y_all[fit_mask], groups[fit_mask], seed,
+                          res / "training_history" / "mlp_history.csv")
+        if args.mlp_history_only:
+            return
 
     # networks + reference routes of the student-test trips for sequence-level metrics
     test_dir = CFG["paths"]["test_dir"]
