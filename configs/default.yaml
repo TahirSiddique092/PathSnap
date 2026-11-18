@@ -34,3 +34,20 @@ hmm:
 
 metrics:
   continuity_max_hops: 3          # consecutive predicted arcs "connected" if reachable within N arc hops
+
+features:                         # P2 (pathsnap/features.py)
+  heading_window_pts: 3           # heading/speed from the displacement between points i-w and i+w
+  neighbour_window_pts: 3         # nbr_dist_* use the arc distance of points i-w..i+w (excluding i)
+  heading_full_speed_mps: 5.0     # heading_align = cos(diff) * min(speed / this, 1): fades out when ~stopped
+
+training:                         # P2 (scripts/train_models.py, scripts/bayes_opt.py)
+  max_train_rows:                 # random row subsample when fitting (models not listed use all rows)
+    knn: 200000                   # KNN prediction cost grows with the number of stored training rows
+  importance_rows: 20000          # student-test rows sampled for permutation importance (scripts/model_diagnostics.py)
+  importance_repeats: 2           # shuffles per feature; the mean increase in log loss is reported
+
+optuna:                           # P2 (scripts/bayes_opt.py) — Bayesian optimisation, TRAIN partition only
+  n_trials: 50                    # WORK_PLAN: at least 50
+  objective: log_loss             # mean GroupKFold CV log loss (minimise): probabilities feed the HMM
+  sampler_startup_trials: 10      # random trials before TPE starts modelling the search space
+  pruner_warmup_folds: 1          # MedianPruner: may stop a trial after this many folds if clearly worse
